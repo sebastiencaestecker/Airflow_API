@@ -1,11 +1,3 @@
-"""
-To use this DAG, you need to set some variables within the Airflow UI:
-
-- `WeatherBitApiKey`: the API key to use to access the WeatherBit API.
-- `S3BucketName`: the name of the S3 bucket where the data will be stored.
-
-Also set the connection for the Postgres database and the AWS account.
-"""
 import json
 import logging
 from datetime import datetime
@@ -30,23 +22,17 @@ def _fetch_weather_data(**context):
     """Fetches data from WeatherBit API and save it to S3.
     """
     logging.info(f"Fetching weather data")
-    # Get the API key from the Variables
     api_key = Variable.get("WeatherBitApiKey")
-    # Fetch WeatherBit
     full_url = f"https://api.weatherbit.io/v2.0/current?city=Paris&country=France&key={api_key}"
     response = requests.get(full_url)
-    # We create a filename like: 20220601-123000_weather_data.json
     filename = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}_weather_data.json"
-    # Let's temprorary save this file into /tmp folder
     full_path_to_file = f"/tmp/{filename}"
     with open(full_path_to_file, "w") as f:
         json.dump(response.json(), f)
-    # Connect to our S3 bucket and load the file
-    # filename is the path to our file and key is the full path inside the
-    # bucket
+
     s3_hook = S3Hook(aws_conn_id="aws_default")
     s3_hook.load_file(filename=full_path_to_file, key=filename, bucket_name=Variable.get("S3BucketName"))
-    # Let's push the filename to the context so that we can use it later
+
     context["task_instance"].xcom_push(key="weather_filename", value=filename)
     logging.info(f"Saved weather data to {filename}")
 
@@ -54,14 +40,14 @@ def _fetch_weather_data(**context):
 def _transform_weather_data(**context):
     """Transforms raw data from JSON file to ingestable data for Postgres.
     """
-    # We get the filename from the context
+
     filename = context["task_instance"].xcom_pull(key="weather_filename")
-    # Connect to our S3 bucket and download the JSON file
+
     s3_hook = S3Hook(aws_conn_id="aws_default")
     returned_filename = s3_hook.download_file(filename, bucket_name=Variable.get("S3BucketName"), local_path="/tmp")
     with open(returned_filename, "r") as f:
         raw_data_json = json.load(f)
-    # We transform the data into a pandas DataFrame
+
     raw_data_json = raw_data_json["data"][0]
     transformed_data = {
         "observation_time": raw_data_json["ob_time"],
@@ -80,14 +66,10 @@ def _transform_weather_data(**context):
         "description": raw_data_json["weather"]["description"],
     }
     df = pd.DataFrame(transformed_data, index=[0])
-    # Keep the same filename between the JSON file and the CSV
     csv_filename = filename.split(".")[0] + ".csv"
     csv_filename_full_path = f"/tmp/{csv_filename}"
-    # Save it temporarily in /tmp folder
     df.to_csv(csv_filename_full_path, index=False, header=False)
-    # Load it to S3
     s3_hook.load_file(filename=csv_filename_full_path, key=csv_filename, bucket_name=Variable.get("S3BucketName"))
-    # Push the filename to the context so that we can use it later
     context["task_instance"].xcom_push(key="weather_csv_filename", value=csv_filename)
 
     
@@ -114,15 +96,8 @@ def _transform_status_data(**context):
     returned_filename = s3_hook.download_file(filename, bucket_name=Variable.get("S3BucketName"), local_path="/tmp")
     with open(returned_filename, "r") as f:
         raw_data_json = json.load(f)
-    # Here the process is a bit different because we have multiple stations.
-    # pd.json_normalize() will transform the data into a pandas DataFrame and
-    # will flatten the data for us!
-    # We just need to give it the array of dict, which is inside "data" and
-    # "stations" keys.
     df = pd.json_normalize(raw_data_json["data"]["stations"])
-    # We keep only those four columns
     df = df[["station_id", "last_reported", "numBikesAvailable", "numDocksAvailable"]]
-    # We convert "last_reported" column to datetime
     df["last_reported"] = df["last_reported"].apply(lambda x: datetime.fromtimestamp(x).strftime("%Y-%m-%d %H:%M:%S"))
     csv_filename = filename.split(".")[0] + ".csv"
     csv_filename_full_path = f"/tmp/{csv_filename}"
@@ -144,7 +119,6 @@ with DAG(dag_id="etl_dag", default_args=default_args, schedule_interval="@hourly
 
         create_weather_table = PostgresOperator(
             task_id="create_weather_table",
-            # In the SQL do not forget to put `IF NOT EXISTS`
             sql="""
             CREATE TABLE IF NOT EXISTS weather_data (
                 id SERIAL PRIMARY KEY,

@@ -26,14 +26,9 @@ class S3ToPostgresOperator(BaseOperator):
         self.aws_conn_id: str = aws_conn_id
 
     def execute(self, context):
-        # Get the file from S3
         s3_hook = S3Hook(aws_conn_id=self.aws_conn_id)
         returned_filename = s3_hook.download_file(self.key, bucket_name=self.bucket, local_path="/tmp")
-        # Open the file
         df_file = pd.read_csv(returned_filename, header=None)
-        # Create a new connection
         postgres_hook = PostgresHook(postgres_conn_id=self.postgres_conn_id)
-        # This is undocumented, but you can get a SQLAlchemy engine from the hook
         engine = postgres_hook.get_sqlalchemy_engine()
-        # This engine can be used with Pandas `to_sql` to write to the database
         df_file.to_sql(self.table, engine, if_exists="replace", index=False)
