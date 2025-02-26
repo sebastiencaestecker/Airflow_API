@@ -1,0 +1,3 @@
+apache-airflow-providers-postgres[amazon]
+psycopg2-binary
+pandas
